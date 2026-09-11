@@ -262,87 +262,73 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-#%% Boxplots mensais e anuais para avaliação de valores extremos
-dados_boxplot = serie_diaria.copy()
-dados_boxplot["ano"] = dados_boxplot.index.year
-dados_boxplot["mes"] = dados_boxplot.index.month
-
-# Distribuição dos valores diários por mês do ano.
-dados_mensais = [
-    dados_boxplot.loc[dados_boxplot["mes"] == mes, "precipitacao"].dropna()
-    for mes in range(1, 13)
-]
-limites_mensais = []
-for mes, valores_mes in enumerate(dados_mensais, start=1):
-    q1_mes = valores_mes.quantile(0.25)
-    q3_mes = valores_mes.quantile(0.75)
-    iqr_mes = q3_mes - q1_mes
-    limite_mes = q3_mes + 1.5 * iqr_mes
-    extremos_mes = valores_mes[valores_mes > limite_mes]
-    limites_mensais.append(
-        {
-            "mes": mes,
-            "q1": q1_mes,
-            "q3": q3_mes,
-            "limite_superior": limite_mes,
-            "quantidade_extremos": len(extremos_mes),
-            "maior_valor": valores_mes.max(),
-        }
-    )
-
-avaliacao_extremos_mensais = pd.DataFrame(limites_mensais).set_index("mes")
-print("\nExtremos por mês:")
-print(avaliacao_extremos_mensais)
-
-# Distribuição dos totais anuais.
-totais_anuais = dados_boxplot.groupby("ano")["precipitacao"].sum()
-q1_anual = totais_anuais.quantile(0.25)
-q3_anual = totais_anuais.quantile(0.75)
-iqr_anual = q3_anual - q1_anual
-limite_anual = q3_anual + 1.5 * iqr_anual
-extremos_anuais = totais_anuais[totais_anuais > limite_anual]
-
-print("\nExtremos por ano:")
-print(
-    pd.DataFrame(
-        {
-            "total_anual": totais_anuais,
-            "extremo": totais_anuais > limite_anual,
-        }
-    )
+#%% Avaliação de valores extremos por mês e por ano
+serie_avaliacao = serie_diaria["precipitacao"].astype(float).sort_index()
+dados_boxplot = pd.DataFrame(
+    {
+        "precipitacao": serie_avaliacao,
+        "mes": serie_avaliacao.index.month,
+        "ano": serie_avaliacao.index.year,
+    },
+    index=serie_avaliacao.index,
 )
-print(f"\nLimite superior anual pelo IQR: {limite_anual:.2f} mm")
-print("Anos com total anual extremo:")
-print(extremos_anuais)
+
+
+def resumir_extremos_por_grupo(dados, grupo):
+    """Calcula limites do IQR e quantidade de extremos por grupo."""
+    resumo = []
+    for identificador, valores in dados.groupby(grupo)["precipitacao"]:
+        q1_grupo = valores.quantile(0.25)
+        q3_grupo = valores.quantile(0.75)
+        iqr_grupo = q3_grupo - q1_grupo
+        limite_superior = q3_grupo + 1.5 * iqr_grupo
+        extremos_grupo = valores[valores > limite_superior]
+        resumo.append(
+            {
+                grupo: identificador,
+                "q1": q1_grupo,
+                "q3": q3_grupo,
+                "limite_superior": limite_superior,
+                "quantidade_extremos": len(extremos_grupo),
+                "maior_valor": valores.max(),
+            }
+        )
+    return pd.DataFrame(resumo).set_index(grupo)
+
+
+extremos_por_mes = resumir_extremos_por_grupo(dados_boxplot, "mes")
+extremos_por_ano = resumir_extremos_por_grupo(dados_boxplot, "ano")
+
+print("\nExtremos por mês:")
+print(extremos_por_mes)
+print("\nExtremos por ano:")
+print(extremos_por_ano)
 
 fig, eixos = plt.subplots(2, 1, figsize=(15, 10))
-eixos[0].boxplot(
-    dados_mensais,
-    labels=["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
-            "Jul", "Ago", "Set", "Out", "Nov", "Dez"],
+dados_boxplot.boxplot(
+    column="precipitacao",
+    by="mes",
+    ax=eixos[0],
+    grid=False,
     showfliers=True,
 )
-eixos[0].set_title("Boxplot mensal da precipitação diária")
+eixos[0].set_title("Boxplot da precipitação diária por mês")
 eixos[0].set_xlabel("Mês")
-eixos[0].set_ylabel("Precipitação diária (mm)")
-eixos[0].grid(axis="y", alpha=0.3)
+eixos[0].set_ylabel("Precipitação (mm)")
 
-eixos[1].boxplot(
-    totais_anuais.to_numpy(),
-    labels=["Série histórica"],
+dados_boxplot.boxplot(
+    column="precipitacao",
+    by="ano",
+    ax=eixos[1],
+    grid=False,
     showfliers=True,
 )
-eixos[1].scatter(
-    np.ones(len(extremos_anuais)),
-    extremos_anuais.to_numpy(),
-    color="tab:red",
-    zorder=3,
-    label="Anos extremos",
-)
-eixos[1].set_title("Boxplot dos totais anuais")
-eixos[1].set_ylabel("Precipitação anual (mm)")
-eixos[1].grid(axis="y", alpha=0.3)
-eixos[1].legend()
+eixos[1].set_title("Boxplot da precipitação diária por ano")
+eixos[1].set_xlabel("Ano")
+eixos[1].set_ylabel("Precipitação (mm)")
+eixos[1].tick_params(axis="x", rotation=45)
+
+fig.suptitle("Distribuição e valores extremos da precipitação")
 plt.tight_layout()
 plt.show()
 
@@ -382,6 +368,11 @@ print(extremos.head(20))
 
 # Mudanças aparentes: médias móveis e tendência linear anual.
 media_movel_90 = serie_avaliacao.rolling("90D", min_periods=30).mean()
+totais_mensais = serie_avaliacao.resample("MS").sum(min_count=1)
+media_movel_anual = totais_mensais.rolling(
+    window=12,
+    min_periods=12,
+).mean()
 anos = avaliacao_anual.index.year.to_numpy()
 totais = avaliacao_anual["total"].to_numpy()
 validos = ~np.isnan(totais)
@@ -390,6 +381,8 @@ print(
     "\nMudança aparente no total anual: "
     f"{coeficiente_tendencia:.2f} mm/ano"
 )
+print("\nMédia móvel anual (12 meses):")
+print(media_movel_anual.dropna().tail())
 
 fig, eixos = plt.subplots(2, 1, figsize=(15, 9), sharex=False)
 eixos[0].plot(
@@ -404,6 +397,12 @@ eixos[0].plot(
     np.polyval(np.polyfit(anos[validos], totais[validos], 1), anos),
     linestyle="--",
     label="Tendência linear aparente",
+)
+eixos[0].plot(
+    media_movel_anual.index,
+    media_movel_anual,
+    linewidth=1.5,
+    label="Média móvel anual (12 meses)",
 )
 eixos[0].set_ylabel("Precipitação anual (mm)")
 eixos[0].set_title("Mudanças aparentes no total anual")
@@ -428,5 +427,39 @@ eixos[1].set_ylabel("Precipitação média (mm)")
 eixos[1].set_title("Variabilidade e extremos ao longo do tempo")
 eixos[1].grid(alpha=0.3)
 eixos[1].legend()
+plt.tight_layout()
+plt.show()
+
+#%% Decomposição sazonal em ciclos de 12 meses
+from statsmodels.tsa.seasonal import seasonal_decompose
+
+serie_mensal = (
+    serie_avaliacao.resample("MS")
+    .sum(min_count=1)
+    .dropna()
+)
+decomposicao = seasonal_decompose(
+    serie_mensal,
+    model="additive",
+    period=12,
+    extrapolate_trend="freq",
+)
+
+print("\nComponente sazonal média por mês:")
+print(decomposicao.seasonal.groupby(decomposicao.seasonal.index.month).mean())
+
+fig, eixos = plt.subplots(4, 1, figsize=(15, 11), sharex=True)
+eixos[0].plot(serie_mensal, color="0.35")
+eixos[0].set_title("Série mensal de precipitação")
+eixos[1].plot(decomposicao.trend, color="tab:blue")
+eixos[1].set_title("Tendência")
+eixos[2].plot(decomposicao.seasonal, color="tab:green")
+eixos[2].set_title("Sazonalidade — ciclo de 12 meses")
+eixos[3].plot(decomposicao.resid, color="tab:red")
+eixos[3].set_title("Resíduo")
+for eixo in eixos:
+    eixo.grid(alpha=0.3)
+    eixo.set_ylabel("mm")
+eixos[-1].set_xlabel("Data")
 plt.tight_layout()
 plt.show()
