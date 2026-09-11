@@ -62,69 +62,93 @@ def preencher_chuva_na(
     fim="1999-02-01",
     random_state=42,
 ):
-    """Preenche somente a lacuna com bootstrap empírico sazonal mensal.
+    """Preenche a lacuna no formato mensal original do HidroWeb.
 
-    Os valores sorteados vêm da distribuição observada do mesmo mês, usando
-    apenas registros fora da lacuna. Assim, zeros, chuvas fracas e eventos
-    intensos são preservados sem interpolação linear.
+    O valor de cada dia é sorteado, com reposição, da distribuição observada
+    no mesmo mês em outros anos fora da lacuna. Isso preserva a sazonalidade,
+    a frequência de dias secos e os eventos intensos sem interpolação linear.
     """
-    df_preenchido = df.copy()
     inicio = pd.Timestamp(inicio)
     fim = pd.Timestamp(fim)
-    rng = np.random.default_rng(random_state)
+    if inicio.day != 1 or fim.day != 1 or inicio > fim:
+        raise ValueError("inicio e fim devem ser o primeiro dia de um mês.")
 
-    chuva = (
-        df.loc[:, colunas]
+    resultado = df.copy()
+    resultado.index = pd.to_datetime(resultado.index)
+    if resultado.index.has_duplicates:
+        raise ValueError("O índice mensal não pode conter datas duplicadas.")
+
+    meses_lacuna = pd.date_range(inicio, fim, freq="MS")
+    indice_original = resultado.index
+    indice_completo = indice_original.union(meses_lacuna).sort_values()
+    resultado = resultado.reindex(indice_completo)
+    resultado.index.name = df.index.name or "Data"
+
+    valores = (
+        df.reindex(indice_original)[colunas]
         .replace(r"^\s*$", np.nan, regex=True)
         .replace(["n/a", "N/A", "NaN"], np.nan)
         .apply(pd.to_numeric, errors="coerce")
     )
+    valores.index = indice_original
+    fora_lacuna = ~valores.index.isin(meses_lacuna)
+    rng = np.random.default_rng(random_state)
+    historico = {}
 
-    fora_lacuna = (df.index < inicio) | (df.index > fim)
-    historico = {
-        mes: chuva.loc[fora_lacuna & (df.index.month == mes), colunas]
-        .stack()
-        .dropna()
-        .to_numpy()
-        for mes in range(1, 13)
-    }
+    for mes in range(1, 13):
+        linhas_mes = valores.loc[fora_lacuna & (valores.index.month == mes)]
+        historico[mes] = {
+            coluna: linhas_mes[coluna].dropna().to_numpy()
+            for coluna in colunas
+        }
+        if not any(amostras.size for amostras in historico[mes].values()):
+            raise ValueError(f"Não há dados históricos para o mês {mes}.")
 
-    if any(valores.size == 0 for valores in historico.values()):
-        meses_sem_historico = [
-            str(mes) for mes, valores in historico.items() if valores.size == 0
-        ]
-        raise ValueError(
-            "Não há observações para os meses: "
-            + ", ".join(meses_sem_historico)
+        historico[mes]["_mensal"] = (
+            linhas_mes[colunas].stack().dropna().to_numpy()
         )
 
-    df_preenchido["DadoSintetico"] = False
-    for posicao, indice in enumerate(df.index):
-        if not inicio <= indice <= fim:
-            continue
-
-        dias_no_mes = indice.days_in_month
-        mes = indice.month
-        amostra = rng.choice(historico[mes], size=dias_no_mes, replace=True)
-
-        for dia in range(1, dias_no_mes + 1):
+    resultado["DadoSintetico"] = False
+    for data in meses_lacuna:
+        dias_no_mes = data.days_in_month
+        for dia in range(1, 32):
             coluna = f"Chuva{dia:02d}"
             if coluna not in colunas:
                 continue
-            coluna_posicao = chuva.columns.get_loc(coluna)
-            if pd.isna(chuva.iat[posicao, coluna_posicao]):
-                chuva.iat[posicao, coluna_posicao] = max(
-                    0.0, float(amostra[dia - 1])
-                )
-                df_preenchido.iloc[posicao, df_preenchido.columns.get_loc(
-                    "DadoSintetico"
-                )] = True
 
-    df_preenchido.loc[:, colunas] = chuva
-    return df_preenchido
+            if dia > dias_no_mes:
+                resultado.at[data, coluna] = np.nan
+                continue
+
+            atual = resultado.at[data, coluna]
+            vazio = pd.isna(atual) or str(atual).strip().lower() in {
+                "n/a", "nan", ""
+            }
+            if not vazio:
+                continue
+
+            amostras = historico[data.month][coluna]
+            if amostras.size == 0:
+                amostras = historico[data.month]["_mensal"]
+            resultado.at[data, coluna] = max(
+                0.0, float(rng.choice(amostras))
+            )
+            resultado.at[data, "DadoSintetico"] = True
+
+    if "Ano" in resultado.columns:
+        resultado["Ano"] = resultado.index.year
+    if "Mes" in resultado.columns:
+        resultado["Mes"] = resultado.index.month
+    return resultado
 
 
-df = preencher_chuva_na(df, colunas_chuva)
+df = preencher_chuva_na(
+    df,
+    colunas_chuva,
+    inicio="1996-07-01",
+    fim="1999-02-01",
+    random_state=42,
+)
 #%% avaliacao de duplicadas 
 print("Linhas:", len(df))
 print("Datas únicas:", df.index.nunique())
@@ -139,7 +163,7 @@ print(
 )
 #%%
 
-'''  foi avalaido que as duplicadas são referentes a mesma data 
+'''  foi avaliado que as duplicadas são referentes a mesma data 
     mas com diferentes niveis de consistencia, 
     irei priorizar o tipo 1 que é o que mais tem dados
 '''
