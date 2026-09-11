@@ -128,10 +128,11 @@ def preencher_chuva_na(
             continue
 
         linha_sintetica = pd.Series(
-            np.nan,
             index=resultado.columns,
             name=data,
+            dtype=object,
         )
+        linha_sintetica.loc[:] = np.nan
         linha_sintetica["DadoSintetico"] = True
         dias_no_mes = data.days_in_month
         for dia in range(1, 32):
@@ -188,17 +189,17 @@ print(
     irei priorizar o tipo 1 que é o que mais tem dados
 '''
 
-def filtrar_consistencia_2(df):
+def filtrar_consistencia_1(df):
     print("Nível de consistência:")
     print(df["NivelConsistencia"].value_counts().sort_index())
 
-    df_filtrado = df[df["NivelConsistencia"] == 1].copy()
+    df_filtrado = df[df["NivelConsistencia"] == 1 | df["NivelConsistencia"].isnull()].copy()
 
     print(f"\nTotal de registros antes do filtro: {len(df)}")
     print(f"Total de registros com consistência 1: {len(df_filtrado)}")
 
     return df_filtrado
-df_consistente = filtrar_consistencia_2(df)
+df_consistente = filtrar_consistencia_1(df)
 # %%
 # Transformando a tabela mensal em série diária.
 dias = np.array([int(coluna[-2:]) for coluna in colunas_chuva])
@@ -236,27 +237,196 @@ plt.figure(figsize=(15, 5))
 plt.plot(
     serie_diaria.index,
     serie_diaria["precipitacao"],
-    color="0.65",
+    # color="0.65",
     linewidth=0.7,
     label="Dados observados",
 )
 plt.plot(
     serie_diaria.index[periodo_sintetico],
     serie_diaria.loc[periodo_sintetico, "precipitacao"],
-    color="tab:orange",
+    # color="tab:orange",
     linewidth=0.8,
     label="Dados sintéticos",
 )
-plt.axvspan(
-    pd.Timestamp("1996-07-01"),
-    pd.Timestamp("1999-02-28"),
-    color="tab:orange",
-    alpha=0.12,
-)
+# plt.axvspan(
+#     pd.Timestamp("1996-07-01"),
+#     pd.Timestamp("1999-02-28"),
+#     # color="tab:orange",
+#     alpha=0.12,
+# )
 plt.xlabel("Data")
 plt.ylabel("Precipitação (mm)")
 plt.title("Série diária de precipitação — Estação TUCURUÍ")
 plt.grid(True, alpha=0.3)
 plt.legend()
+plt.tight_layout()
+plt.show()
+
+#%% Boxplots mensais e anuais para avaliação de valores extremos
+dados_boxplot = serie_diaria.copy()
+dados_boxplot["ano"] = dados_boxplot.index.year
+dados_boxplot["mes"] = dados_boxplot.index.month
+
+# Distribuição dos valores diários por mês do ano.
+dados_mensais = [
+    dados_boxplot.loc[dados_boxplot["mes"] == mes, "precipitacao"].dropna()
+    for mes in range(1, 13)
+]
+limites_mensais = []
+for mes, valores_mes in enumerate(dados_mensais, start=1):
+    q1_mes = valores_mes.quantile(0.25)
+    q3_mes = valores_mes.quantile(0.75)
+    iqr_mes = q3_mes - q1_mes
+    limite_mes = q3_mes + 1.5 * iqr_mes
+    extremos_mes = valores_mes[valores_mes > limite_mes]
+    limites_mensais.append(
+        {
+            "mes": mes,
+            "q1": q1_mes,
+            "q3": q3_mes,
+            "limite_superior": limite_mes,
+            "quantidade_extremos": len(extremos_mes),
+            "maior_valor": valores_mes.max(),
+        }
+    )
+
+avaliacao_extremos_mensais = pd.DataFrame(limites_mensais).set_index("mes")
+print("\nExtremos por mês:")
+print(avaliacao_extremos_mensais)
+
+# Distribuição dos totais anuais.
+totais_anuais = dados_boxplot.groupby("ano")["precipitacao"].sum()
+q1_anual = totais_anuais.quantile(0.25)
+q3_anual = totais_anuais.quantile(0.75)
+iqr_anual = q3_anual - q1_anual
+limite_anual = q3_anual + 1.5 * iqr_anual
+extremos_anuais = totais_anuais[totais_anuais > limite_anual]
+
+print("\nExtremos por ano:")
+print(
+    pd.DataFrame(
+        {
+            "total_anual": totais_anuais,
+            "extremo": totais_anuais > limite_anual,
+        }
+    )
+)
+print(f"\nLimite superior anual pelo IQR: {limite_anual:.2f} mm")
+print("Anos com total anual extremo:")
+print(extremos_anuais)
+
+fig, eixos = plt.subplots(2, 1, figsize=(15, 10))
+eixos[0].boxplot(
+    dados_mensais,
+    labels=["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+            "Jul", "Ago", "Set", "Out", "Nov", "Dez"],
+    showfliers=True,
+)
+eixos[0].set_title("Boxplot mensal da precipitação diária")
+eixos[0].set_xlabel("Mês")
+eixos[0].set_ylabel("Precipitação diária (mm)")
+eixos[0].grid(axis="y", alpha=0.3)
+
+eixos[1].boxplot(
+    totais_anuais.to_numpy(),
+    labels=["Série histórica"],
+    showfliers=True,
+)
+eixos[1].scatter(
+    np.ones(len(extremos_anuais)),
+    extremos_anuais.to_numpy(),
+    color="tab:red",
+    zorder=3,
+    label="Anos extremos",
+)
+eixos[1].set_title("Boxplot dos totais anuais")
+eixos[1].set_ylabel("Precipitação anual (mm)")
+eixos[1].grid(axis="y", alpha=0.3)
+eixos[1].legend()
+plt.tight_layout()
+plt.show()
+
+#%% Avaliação de variabilidade, valores extremos e mudanças aparentes
+serie_avaliacao = serie_diaria["precipitacao"].astype(float).sort_index()
+
+# Variabilidade: desvio-padrão e coeficiente de variação por ano.
+avaliacao_anual = serie_avaliacao.resample("YS").agg(
+    total="sum",
+    media="mean",
+    mediana="median",
+    desvio_padrao="std",
+    dias_chuvosos=lambda valores: (valores > 0).sum(),
+)
+avaliacao_anual["coeficiente_variacao"] = (
+    avaliacao_anual["desvio_padrao"] / avaliacao_anual["media"].replace(0, np.nan)
+)
+print("\nVariabilidade anual:")
+print(avaliacao_anual)
+
+# Extremos pelo percentil 99 e pelo limite superior do IQR.
+q1 = serie_avaliacao.quantile(0.25)
+q3 = serie_avaliacao.quantile(0.75)
+iqr = q3 - q1
+limite_extremo = q3 + 1.5 * iqr
+percentil_99 = serie_avaliacao.quantile(0.99)
+extremos = serie_avaliacao[
+    serie_avaliacao >= max(limite_extremo, percentil_99)
+].sort_values(ascending=False)
+
+print("\nLimites para valores extremos:")
+print(f"Q1: {q1:.2f} mm | Q3: {q3:.2f} mm | IQR: {iqr:.2f} mm")
+print(f"Limite superior do IQR: {limite_extremo:.2f} mm")
+print(f"Percentil 99: {percentil_99:.2f} mm")
+print("\nMaiores eventos de precipitação:")
+print(extremos.head(20))
+
+# Mudanças aparentes: médias móveis e tendência linear anual.
+media_movel_90 = serie_avaliacao.rolling("90D", min_periods=30).mean()
+anos = avaliacao_anual.index.year.to_numpy()
+totais = avaliacao_anual["total"].to_numpy()
+validos = ~np.isnan(totais)
+coeficiente_tendencia = np.polyfit(anos[validos], totais[validos], 1)[0]
+print(
+    "\nMudança aparente no total anual: "
+    f"{coeficiente_tendencia:.2f} mm/ano"
+)
+
+fig, eixos = plt.subplots(2, 1, figsize=(15, 9), sharex=False)
+eixos[0].plot(
+    avaliacao_anual.index,
+    avaliacao_anual["total"],
+    marker="o",
+    linewidth=1,
+    label="Precipitação anual",
+)
+eixos[0].plot(
+    avaliacao_anual.index,
+    np.polyval(np.polyfit(anos[validos], totais[validos], 1), anos),
+    linestyle="--",
+    label="Tendência linear aparente",
+)
+eixos[0].set_ylabel("Precipitação anual (mm)")
+eixos[0].set_title("Mudanças aparentes no total anual")
+eixos[0].grid(alpha=0.3)
+eixos[0].legend()
+
+eixos[1].plot(
+    serie_avaliacao.index,
+    media_movel_90,
+    linewidth=0.8,
+    label="Média móvel de 90 dias",
+)
+eixos[1].scatter(
+    extremos.index,
+    extremos.values,
+    color="tab:red",
+    s=12,
+    label="Valores extremos",
+)
+eixos[1].set_xlabel("Data")
+eixos[1].set_ylabel("Precipitação média (mm)")
+eixos[1].set_title("Variabilidade e extremos ao longo do tempo")
+eixos[1].grid(alpha=0.3)
+eixos[1].legend()
 plt.tight_layout()
 plt.show()
