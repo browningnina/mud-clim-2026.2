@@ -75,6 +75,12 @@ def preencher_chuva_na(
 
     resultado = df.copy()
     resultado.index = pd.to_datetime(resultado.index)
+    resultado.loc[:, colunas] = (
+        resultado.loc[:, colunas]
+        .replace(r"^\s*$", np.nan, regex=True)
+        .replace(["n/a", "N/A", "NaN"], np.nan)
+        .apply(pd.to_numeric, errors="coerce")
+    )
 
     meses_lacuna = pd.date_range(inicio, fim, freq="MS")
     indice_original = resultado.index
@@ -117,6 +123,16 @@ def preencher_chuva_na(
 
     resultado["DadoSintetico"] = False
     for data in meses_lacuna:
+        # Meses que já existem na série original não são alterados.
+        if data in indice_original:
+            continue
+
+        linha_sintetica = pd.Series(
+            np.nan,
+            index=resultado.columns,
+            name=data,
+        )
+        linha_sintetica["DadoSintetico"] = True
         dias_no_mes = data.days_in_month
         for dia in range(1, 32):
             coluna = f"Chuva{dia:02d}"
@@ -124,23 +140,20 @@ def preencher_chuva_na(
                 continue
 
             if dia > dias_no_mes:
-                resultado.at[data, coluna] = np.nan
-                continue
-
-            atual = resultado.at[data, coluna]
-            vazio = pd.isna(atual) or str(atual).strip().lower() in {
-                "n/a", "nan", ""
-            }
-            if not vazio:
                 continue
 
             amostras = historico[data.month][coluna]
             if amostras.size == 0:
                 amostras = historico[data.month]["_mensal"]
-            resultado.at[data, coluna] = max(
+            linha_sintetica[coluna] = max(
                 0.0, float(rng.choice(amostras))
             )
-            resultado.at[data, "DadoSintetico"] = True
+        resultado = pd.concat(
+            [resultado, linha_sintetica.to_frame().T],
+            axis=0,
+        )
+
+    resultado = resultado.sort_index()
 
     if "Ano" in resultado.columns:
         resultado["Ano"] = resultado.index.year
