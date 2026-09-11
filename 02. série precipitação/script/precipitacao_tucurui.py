@@ -75,22 +75,29 @@ def preencher_chuva_na(
 
     resultado = df.copy()
     resultado.index = pd.to_datetime(resultado.index)
-    if resultado.index.has_duplicates:
-        raise ValueError("O índice mensal não pode conter datas duplicadas.")
 
     meses_lacuna = pd.date_range(inicio, fim, freq="MS")
     indice_original = resultado.index
-    indice_completo = indice_original.union(meses_lacuna).sort_values()
-    resultado = resultado.reindex(indice_completo)
+    meses_novos = meses_lacuna[~meses_lacuna.isin(indice_original)]
+    if len(meses_novos) > 0:
+        novas_linhas = pd.DataFrame(
+            index=meses_novos,
+            columns=resultado.columns,
+        )
+        resultado = pd.concat([resultado, novas_linhas], axis=0)
+    resultado = resultado.sort_index()
     resultado.index.name = df.index.name or "Data"
 
     valores = (
-        df.reindex(indice_original)[colunas]
+        df.loc[:, colunas]
         .replace(r"^\s*$", np.nan, regex=True)
         .replace(["n/a", "N/A", "NaN"], np.nan)
         .apply(pd.to_numeric, errors="coerce")
     )
     valores.index = indice_original
+    # Duplicatas do HidroWeb são mantidas no resultado, mas uma única
+    # observação por mês é usada para calcular a distribuição histórica.
+    valores = valores.groupby(level=0).first()
     fora_lacuna = ~valores.index.isin(meses_lacuna)
     rng = np.random.default_rng(random_state)
     historico = {}
