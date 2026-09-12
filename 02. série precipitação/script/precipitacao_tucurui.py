@@ -262,6 +262,77 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
+#%% Comparação da tendência em diferentes janelas temporais
+serie_avaliacao = serie_diaria["precipitacao"].astype(float).sort_index()
+totais_anuais_tendencia = serie_avaliacao.resample("YS").sum(min_count=1).dropna()
+data_final = totais_anuais_tendencia.index.max()
+limites_janelas = {
+    "Série completa": totais_anuais_tendencia.index.min(),
+    "Últimos 30 anos": data_final - pd.DateOffset(years=30),
+    "Últimos 20 anos": data_final - pd.DateOffset(years=20),
+    "Últimos 10 anos": data_final - pd.DateOffset(years=10),
+}
+
+resultados_tendencia = []
+fig, eixos = plt.subplots(2, 2, figsize=(15, 9), sharey=True)
+
+for eixo, (nome_janela, limite_inicial) in zip(
+    eixos.ravel(),
+    limites_janelas.items(),
+):
+    dados_janela = totais_anuais_tendencia[
+        totais_anuais_tendencia.index >= limite_inicial
+    ]
+    anos_janela = dados_janela.index.year.to_numpy()
+    valores_janela = dados_janela.to_numpy()
+
+    if len(dados_janela) >= 2:
+        coeficiente = np.polyfit(anos_janela, valores_janela, 1)
+        tendencia = np.polyval(coeficiente, anos_janela)
+        resultados_tendencia.append(
+            {
+                "janela": nome_janela,
+                "ano_inicial": anos_janela.min(),
+                "ano_final": anos_janela.max(),
+                "tendencia_mm_por_ano": coeficiente[0],
+            }
+        )
+        eixo.plot(
+            dados_janela.index,
+            valores_janela,
+            marker="o",
+            linewidth=1,
+            label="Total anual",
+        )
+        eixo.plot(
+            dados_janela.index,
+            tendencia,
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Tendência: {coeficiente[0]:.2f} mm/ano",
+        )
+    else:
+        eixo.text(
+            0.5,
+            0.5,
+            "Dados insuficientes para tendência",
+            ha="center",
+            va="center",
+            transform=eixo.transAxes,
+        )
+
+    eixo.set_title(nome_janela)
+    eixo.set_xlabel("Ano")
+    eixo.set_ylabel("Precipitação anual (mm)")
+    eixo.grid(alpha=0.3)
+    eixo.legend()
+
+print("\nComparação das tendências por janela temporal:")
+print(pd.DataFrame(resultados_tendencia))
+fig.suptitle("Tendência da precipitação em diferentes períodos")
+plt.tight_layout()
+plt.show()
+
 #%% Avaliação de valores extremos por mês e por ano
 serie_avaliacao = serie_diaria["precipitacao"].astype(float).sort_index()
 dados_boxplot = pd.DataFrame(
@@ -369,10 +440,7 @@ print(extremos.head(20))
 # Mudanças aparentes: médias móveis e tendência linear anual.
 media_movel_90 = serie_avaliacao.rolling("90D", min_periods=30).mean()
 totais_mensais = serie_avaliacao.resample("MS").sum(min_count=1)
-media_movel_anual = totais_mensais.rolling(
-    window=12,
-    min_periods=12,
-).mean()
+
 anos = avaliacao_anual.index.year.to_numpy()
 totais = avaliacao_anual["total"].to_numpy()
 validos = ~np.isnan(totais)
@@ -382,7 +450,6 @@ print(
     f"{coeficiente_tendencia:.2f} mm/ano"
 )
 print("\nMédia móvel anual (12 meses):")
-print(media_movel_anual.dropna().tail())
 
 fig, eixos = plt.subplots(2, 1, figsize=(15, 9), sharex=False)
 eixos[0].plot(
@@ -398,12 +465,7 @@ eixos[0].plot(
     linestyle="--",
     label="Tendência linear aparente",
 )
-eixos[0].plot(
-    media_movel_anual.index,
-    media_movel_anual,
-    linewidth=1.5,
-    label="Média móvel anual (12 meses)",
-)
+
 eixos[0].set_ylabel("Precipitação anual (mm)")
 eixos[0].set_title("Mudanças aparentes no total anual")
 eixos[0].grid(alpha=0.3)
@@ -427,6 +489,76 @@ eixos[1].set_ylabel("Precipitação média (mm)")
 eixos[1].set_title("Variabilidade e extremos ao longo do tempo")
 eixos[1].grid(alpha=0.3)
 eixos[1].legend()
+plt.tight_layout()
+plt.show()
+
+#%% Avaliação da variabilidade em relação à tendência
+anos_validos = anos[validos]
+totais_validos = totais[validos]
+ajuste_tendencia = np.polyval(
+    np.polyfit(anos_validos, totais_validos, 1),
+    anos_validos,
+)
+residuos_tendencia = totais_validos - ajuste_tendencia
+desvio_padrao_anual = np.std(totais_validos, ddof=1)
+desvio_padrao_residuos = np.std(residuos_tendencia, ddof=1)
+variacao_explicada_tendencia = abs(
+    ajuste_tendencia[-1] - ajuste_tendencia[0]
+)
+razao_variabilidade_tendencia = (
+    desvio_padrao_residuos / variacao_explicada_tendencia
+    if variacao_explicada_tendencia > 0
+    else np.inf
+)
+
+if razao_variabilidade_tendencia > 1:
+    interpretacao_variabilidade = (
+        "A variabilidade é grande em relação à tendência: "
+        "as oscilações anuais superam a mudança linear estimada."
+    )
+else:
+    interpretacao_variabilidade = (
+        "A variabilidade é pequena em relação à tendência: "
+        "a mudança linear estimada supera as oscilações anuais."
+    )
+
+print("\nVariabilidade em relação à tendência:")
+print(f"Desvio-padrão dos totais anuais: {desvio_padrao_anual:.2f} mm")
+print(f"Desvio-padrão dos resíduos: {desvio_padrao_residuos:.2f} mm")
+print(
+    "Variação explicada pela tendência no período: "
+    f"{variacao_explicada_tendencia:.2f} mm"
+)
+print(
+    "Razão variabilidade/tendência: "
+    f"{razao_variabilidade_tendencia:.2f}"
+)
+print(interpretacao_variabilidade)
+
+fig, eixos = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+eixos[0].plot(
+    anos_validos,
+    totais_validos,
+    marker="o",
+    label="Total anual",
+)
+eixos[0].plot(
+    anos_validos,
+    ajuste_tendencia,
+    linestyle="--",
+    label="Tendência linear",
+)
+eixos[0].set_ylabel("Precipitação anual (mm)")
+eixos[0].set_title("Variabilidade observada e tendência")
+eixos[0].grid(alpha=0.3)
+eixos[0].legend()
+
+eixos[1].axhline(0, color="black", linewidth=0.8)
+eixos[1].bar(anos_validos, residuos_tendencia, width=0.8)
+eixos[1].set_xlabel("Ano")
+eixos[1].set_ylabel("Resíduo (mm)")
+eixos[1].set_title("Oscilações anuais em torno da tendência")
+eixos[1].grid(alpha=0.3)
 plt.tight_layout()
 plt.show()
 
@@ -463,3 +595,17 @@ for eixo in eixos:
 eixos[-1].set_xlabel("Data")
 plt.tight_layout()
 plt.show()
+
+#%% Exportação da série preenchida
+caminho_saida = (
+    r"C:\Users\marin\Projetos\mud-clim-2026.2"
+    r"\02. série precipitação\excel\349000_Chuvas_preenchida.csv"
+)
+df.to_csv(
+    caminho_saida,
+    sep=";",
+    decimal=",",
+    encoding="utf-8-sig",
+    index_label="Data",
+)
+print(f"\nSérie preenchida exportada para: {caminho_saida}")
