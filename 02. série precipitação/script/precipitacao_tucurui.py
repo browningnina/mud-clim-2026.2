@@ -163,13 +163,6 @@ def preencher_chuva_na(
     return resultado
 
 
-df = preencher_chuva_na(
-    df,
-    colunas_chuva,
-    inicio="1996-07-01",
-    fim="1999-02-01",
-    random_state=42,
-)
 #%% avaliacao de duplicadas 
 print("Linhas:", len(df))
 print("Datas únicas:", df.index.nunique())
@@ -193,32 +186,47 @@ def filtrar_consistencia_1(df):
     print("Nível de consistência:")
     print(df["NivelConsistencia"].value_counts().sort_index())
 
-    df_filtrado = df[df["NivelConsistencia"] == 1 | df["NivelConsistencia"].isnull()].copy()
+    df_filtrado = df[
+        (df["NivelConsistencia"] == 1)
+        | (df["NivelConsistencia"].isnull())
+    ].copy()
 
     print(f"\nTotal de registros antes do filtro: {len(df)}")
     print(f"Total de registros com consistência 1: {len(df_filtrado)}")
 
     return df_filtrado
 df_consistente = filtrar_consistencia_1(df)
+df_consistente = preencher_chuva_na(
+    df_consistente,
+    colunas_chuva,
+    inicio="1996-07-01",
+    fim="1999-02-01",
+    random_state=42,
+)
 # %%
 # Transformando a tabela mensal em série diária.
 dias = np.array([int(coluna[-2:]) for coluna in colunas_chuva])
-datas_mensais = np.repeat(df.index.to_numpy(), len(colunas_chuva))
+datas_mensais = np.repeat(
+    df_consistente.index.to_numpy(),
+    len(colunas_chuva),
+)
 datas_diarias = pd.to_datetime(
     {
         "year": pd.DatetimeIndex(datas_mensais).year,
         "month": pd.DatetimeIndex(datas_mensais).month,
-        "day": np.tile(dias, len(df)),
+        "day": np.tile(dias, len(df_consistente)),
     },
     errors="coerce",
 )
 serie_diaria = pd.DataFrame(
     {
         "precipitacao": pd.to_numeric(
-            df[colunas_chuva].to_numpy().ravel(), errors="coerce"
+            df_consistente[colunas_chuva].to_numpy().ravel(),
+            errors="coerce",
         ),
         "sintetica": np.repeat(
-            df["DadoSintetico"].to_numpy(), len(colunas_chuva)
+            df_consistente["DadoSintetico"].to_numpy(),
+            len(colunas_chuva),
         ),
     },
     index=datas_diarias,
@@ -601,7 +609,7 @@ caminho_saida = (
     r"C:\Users\marin\Projetos\mud-clim-2026.2"
     r"\02. série precipitação\excel\349000_Chuvas_preenchida.csv"
 )
-df.to_csv(
+df_consistente.to_csv(
     caminho_saida,
     sep=";",
     decimal=",",
